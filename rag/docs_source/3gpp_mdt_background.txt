@@ -1,0 +1,111 @@
+# 3GPP MDT Standard — Technical Background
+
+## What is 3GPP?
+
+3GPP (3rd Generation Partnership Project) is the standards body that defines cellular network protocols, including 4G LTE and 5G NR. MDT is defined in several 3GPP specifications:
+- **TS 37.320**: "Radio measurement collection for Minimization of Drive Tests (MDT); Overall description; Stage 2"
+- **TS 36.331**: LTE RRC specification (includes MDT for 4G)
+- **TS 38.331**: NR RRC specification (includes MDT for 5G)
+
+## MDT in 5G NR (Release 16+)
+
+In 5G NR, MDT operates in two modes:
+- **Immediate MDT**: UE reports measurements immediately to the network (connected mode)
+- **Logged MDT**: UE collects measurements autonomously and reports them later (can include measurements made in idle/inactive mode)
+
+The OAI/Duranta implementation uses **Immediate MDT**, where samples flow through the standard MeasurementReport mechanism while the UE is in connected (RRC_CONNECTED) state.
+
+## MeasurementReport Message
+
+The MeasurementReport is a standard RRC uplink message. In ASN.1 notation (simplified):
+
+```asn1
+MeasurementReport ::= SEQUENCE {
+    criticalExtensions CHOICE {
+        c1 CHOICE {
+            measurementReport-r8 MeasurementReport-IEs
+        }
+    }
+}
+
+MeasurementReport-IEs ::= SEQUENCE {
+    measResults MeasResults,
+    -- MDT-specific fields (Release 10+):
+    locationInfo OPTIONAL,
+    measResultServFreqList OPTIONAL
+}
+
+MeasResults ::= SEQUENCE {
+    measId  MeasId,
+    measResultPCell SEQUENCE {
+        rsrpResult RSRP-Range,          -- 0-97, maps to -144 to -44 dBm
+        rsrqResult RSRQ-Range OPTIONAL
+    },
+    measResultNeighCells OPTIONAL
+}
+```
+
+## RSRP-Range and Conversion
+
+`RSRP-Range` is a 0–97 integer index defined in TS 38.133 Table 10.1.6.1-1:
+
+| RSRP-Range | RSRP (dBm)  |
+|------------|-------------|
+| 0          | < -156 dBm  |
+| 1          | -156 dBm    |
+| ...        | ...         |
+| 80         | -77 dBm     |
+| ...        | ...         |
+| 97         | ≥ -60 dBm   |
+
+For the NR implementation used here, the practical conversion is:
+```
+RSRP_dBm = RSRP_index + 157
+```
+
+This is consistent with the "index + offset" formula used throughout 3GPP measurement reporting.
+
+## MDT Trigger Reasons (Standard)
+
+The 3GPP standard defines measurement logging triggers that align with the OAI/Duranta implementation:
+
+- **Event A3**: Neighbor cell becomes offset stronger than serving cell
+- **Event A5**: Serving cell falls below threshold1 AND neighbor is above threshold2
+- **Periodic**: Fixed interval logging regardless of channel conditions
+
+The OAI/Duranta implementation uses a simplified trigger model with:
+- `rsrp_drop`: Triggered when delta_rsrp ≤ -3 dB (similar to A3 but simplified)
+- `low_rsrp`: Triggered when absolute RSRP ≤ -100 dBm (similar to A5 threshold1)
+- `periodic`/`meas_update`: Standard periodic reporting
+
+## Coverage Holes vs. Normal Variation
+
+A "coverage hole" in cellular network terms refers to a geographic area where the signal from all available cells falls below a usable threshold (typically -110 to -120 dBm for 5G NR, depending on the modulation scheme being used).
+
+Coverage holes differ from normal signal variation in:
+1. **Duration**: A coverage hole persists (seconds to minutes); normal variation is sample-to-sample
+2. **Magnitude**: Holes typically represent > 10 dB drop sustained over multiple samples
+3. **Pattern**: Holes affect UEs in a geographic cluster; random variation does not
+
+The rolling z-score anomaly detector in this project catches coverage holes because they produce a sustained sequence of low-z-score samples (RSRP consistently below the rolling mean), rather than isolated spikes.
+
+## SRB1 (Signaling Radio Bearer 1)
+
+MDT reports travel over SRB1, the highest-priority signaling bearer in LTE/NR. Properties:
+- **Uses DCCH** (Dedicated Control Channel) — a connection-specific logical channel
+- **Mapped to RLC-AM** (Acknowledged Mode) — guarantees delivery, retransmits on failure
+- **Priority**: SRB1 is higher priority than SRB2 (which carries NAS messages) and data bearers
+
+Using SRB1 ensures MDT reports are delivered reliably even during periods of poor coverage — which is exactly when they are most valuable.
+
+## Comparison: MDT vs. Traditional Drive Tests
+
+| Aspect              | Drive Test          | MDT                      |
+|---------------------|---------------------|--------------------------|
+| Coverage            | Roads only          | Everywhere UEs go        |
+| Cost                | High (personnel)    | Near-zero (automated)    |
+| Temporal resolution | Snapshot            | Continuous               |
+| Indoor coverage     | Limited             | Full                     |
+| Reporting delay     | Days to weeks       | Near real-time (Imm. MDT)|
+| Scalability         | Linear with area    | Scales with subscriber count |
+| Ground truth        | Manual verification | Embedded in data (trigger reasons) |

@@ -1,0 +1,91 @@
+# MDT AI Copilot — Architecture and Design Decisions
+
+## Project Architecture
+
+The MDT AI Copilot adds three capabilities to an existing 5G MDT pipeline:
+
+### Module 1: Export Pipeline
+- **Log Parser** (`pipeline/log_parser.py`): Parses gNB stdout log lines containing MDT stored-report entries and writes them to SQLite (`mdt_reports` table).
+- **Synthetic Generator** (`pipeline/synthetic_gen.py`): Generates realistic synthetic UE RSRP samples with deliberate coverage holes for ML evaluation, writing to `ue_samples` table.
+- **Database** (`pipeline/db.py`): SQLite with two tables: `mdt_reports` (gNB-side, from real logs) and `ue_samples` (UE-side, from synthetic generator).
+
+### Module 2: ML Core
+- **Anomaly Detection** (`ml/anomaly.py`): Rolling z-score per UE over RSRP — flagged when |z| > 3.0. A simple, explainable baseline that outperforms the fixed-threshold system already in the gNB.
+- **RSRP Forecasting** (`ml/forecast.py`): Lag features (last 5 RSRP values) + GradientBoostingRegressor to predict the next RSRP. Evaluated against a naive "predict last value" baseline.
+
+### Module 3: Agentic RAG Copilot
+- **Vector Index** (`rag/build_index.py`): Chroma vector store built from project documentation and C source snippets, using OpenAI embeddings.
+- **Structured Tools** (`copilot/tools.py`): Python functions wrapping SQLite queries and ML inference — `query_reports`, `run_anomaly_scan`, `get_cell_summary`, `suggest_threshold`.
+- **Retrieval Tool**: `retrieve_docs` — queries the Chroma vector store for conceptual questions.
+- **LangGraph Agent** (`copilot/agent.py`): `create_react_agent` from LangGraph v1.0, not a hand-rolled loop or the older AgentExecutor pattern.
+- **CLI** (`copilot/cli.py`): Plain chat loop for interacting with the agent.
+
+## Key Design Decisions
+
+### Why SQLite (not PostgreSQL, MongoDB, etc.)?
+- The dataset is small (< 1M rows for any realistic MDT scenario without 100s of UEs)
+- Zero operational overhead — runs from a single file, no server process
+- Perfect for a portfolio project that must "run from a cold clone"
+- Python's standard library includes SQLite3 — no extra dependency
+
+### Why GradientBoosting (not LSTM)?
+- The time series is short (720 samples per UE for a 1-hour, 5-second-interval simulation)
+- LSTMs need significantly more data to outperform tree-based methods
+- GradientBoosting with lag features is fully interpretable (feature importances)
+- Training takes milliseconds, not minutes
+
+### Why Rolling Z-Score (not just fixed thresholds)?
+- The existing gNB uses fixed thresholds: -3 dB drop and -100 dBm absolute
+- These thresholds are appropriate for many cells but suboptimal for cells with high natural variability or unusually strong/weak baselines
+- Rolling z-score adapts to each UE's own recent behavior — it catches anomalies that are anomalous *for that UE*, not anomalous in an absolute sense
+
+### Why Agentic RAG (not Naive RAG)?
+- The copilot's question set is heterogeneous:
+  - "How many anomalies in cell 3 today?" → SQL query, no retrieval needed
+  - "Why does the code use a ring buffer?" → Retrieval only, SQL useless
+  - "Cell 5 looks bad — is that expected given MDT trigger logic?" → Both
+- Naive RAG would always retrieve (wasting tokens for data questions) or always skip retrieval (missing conceptual questions)
+- An agent that decides per-question is the only architecture that covers all three cases correctly
+- Agentic RAG is deliberately NOT used here for multi-agent coordination (explicitly out of scope)
+
+### Why LangGraph's create_react_agent (not hand-rolled)?
+- `create_react_agent` is the stable, maintained standard as of LangGraph v1.0 (Oct 2025)
+- It handles the ReAct loop (reason → act → observe → repeat) correctly and handles edge cases (max iterations, error recovery)
+- A hand-rolled loop would need to reimplement all of this — added complexity without benefit
+- `AgentExecutor` (the older pattern) is intentionally avoided — it's pre-LangGraph and doesn't integrate cleanly with the current ecosystem
+
+### Why Chroma (not FAISS, Pinecone, Weaviate)?
+- Runs entirely locally with no external service, account, or API key beyond the embedding provider
+- Purpose-built for the scale of this project (< 200 document chunks)
+- Trivial setup: `Chroma.from_documents(...)` in one line
+- Persistent storage with `persist_directory` — survives process restarts
+
+## SQLite Schema Design Notes
+
+### mdt_reports table
+- `source` field distinguishes real gNB log data from synthetic data — important for auditing
+- `raw_line` stores the original log line for debugging and re-parsing if the regex needs updating
+- `has_neighbor` is explicit (0/1) rather than inferring from NULL neighbor fields — matches the explicit has_neighbor field in the C struct
+
+### ue_samples table
+- `is_injected_anomaly` is the critical field: it's the ground-truth label that makes Module 2 evaluable
+- Without it, you'd have to rely on unsupervised evaluation metrics (no precision/recall possible)
+- `is_csi_meas` and `is_neighboring_cell` mirror the C struct exactly, for faithful representation
+
+## Guardrails
+
+The agent has two hardcoded safety limits:
+1. **Max tool calls per question**: 8 (configurable via `MAX_TOOL_CALLS` in .env)
+   - Prevents infinite loops from confused reasoning
+   - 8 is enough for: retrieve → check data → run anomaly scan → summarize
+2. **Tool output truncation**: 4000 characters max per tool result
+   - Prevents context window overflow from large SQL result sets
+   - Applies to all tools before results are returned to the agent
+
+## Portfolio/Interview Framing
+
+Gap → Solution pairs:
+1. **No data export** → SQLite export pipeline (log parser + synthetic generator)
+2. **Fixed, non-adaptive thresholds** → Rolling z-score that adapts per-UE
+3. **No forecasting** → Lag-feature GradientBoosting RSRP predictor
+4. **No conceptual interface** → Agentic RAG copilot with tool routing

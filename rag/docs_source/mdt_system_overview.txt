@@ -1,0 +1,55 @@
+# MDT System Overview — Technical Documentation
+
+## What is MDT?
+
+Minimization of Drive Tests (MDT) is a 3GPP standard feature (introduced in Release 10, extended through Release 17 and 18) that enables mobile networks to collect signal measurements directly from User Equipment (UE), replacing expensive, manual drive test campaigns with automated, continuous in-network measurement collection.
+
+Instead of sending engineers with measurement equipment in vehicles around a coverage area, the network configures UEs (phones) to log signal measurements and report them back through the existing radio control signaling — specifically the RRC (Radio Resource Control) protocol's `MeasurementReport` mechanism.
+
+## Why MDT Matters
+
+Traditional drive tests have three fundamental problems:
+1. **Cost**: Physical field campaigns require equipment and personnel.
+2. **Coverage gaps**: Drive tests only measure where the test vehicle drives — they miss indoor coverage, pedestrian-only areas, and sparse rural paths.
+3. **Freshness**: A drive test is a snapshot in time. Network conditions change.
+
+MDT closes all three gaps: UEs are everywhere, they measure continuously, and the data flows through the existing radio infrastructure.
+
+## The OpenAirInterface (OAI) MDT Implementation
+
+This project is built on OpenAirInterface's open-source 5G NR (New Radio) implementation. The OAI implementation includes:
+- A UE-side MDT measurement logger (in the UE RRC stack)
+- A gNB-side (base station) MDT report receiver and storage system
+- The complete RRC signaling flow for delivering measurements from UE to gNB
+
+The key limitation of the OAI/Duranta fork this project extends: collected reports are stored in gNB memory only, with no export mechanism, no persistence, and no analytics layer.
+
+## MDT Data Flow in the OAI System
+
+1. **Configuration**: The gNB (via RRC) configures the UE's MDT logging parameters (measurement ID, trigger conditions, period).
+2. **Measurement**: The UE samples its radio environment periodically or on trigger. Samples include RSRP (Reference Signal Received Power), which indicates signal strength.
+3. **Logging**: Samples are stored in the UE's ring buffer (`NR_MDT_LOG_BUFFER_SIZE = 64` entries per connection).
+4. **Reporting**: The UE packages logged samples into an RRC `MeasurementReport` message and sends it over SRB1 (Signaling Radio Bearer 1).
+5. **Storage**: The gNB decodes the report and stores it in that UE's per-connection context via `store_mdt_report()` in `rrc_gNB.c`.
+
+## RSRP: The Core Measurement
+
+RSRP (Reference Signal Received Power) measures the average power of the reference signal from the serving cell, in dBm. Key thresholds in the Duranta fork:
+- **rsrp_drop trigger**: A drop of ≥ 3 dB vs. the previous sample triggers a `rsrp_drop` measurement reason.
+- **low_rsrp trigger**: An absolute RSRP ≤ -100 dBm triggers a `low_rsrp` reason.
+- **Mapping**: The raw RSRP index from the 3GPP ASN.1 message is converted to dBm via `index + 157` (standard 3GPP Table 10.1.6.1-1 mapping).
+
+Typical RSRP ranges:
+- Excellent: > -80 dBm
+- Good: -80 to -90 dBm
+- Fair: -90 to -100 dBm
+- Poor: -100 to -110 dBm
+- Marginal: < -110 dBm
+
+## Known Limitations of the Existing System
+
+1. **No export**: Reports live in gNB memory only. When the gNB process stops, data is lost.
+2. **Single-neighbor limitation**: Only the first serving result and first neighbor result per report are kept.
+3. **Fixed thresholds**: The 3 dB drop and -100 dBm absolute thresholds are hard-coded, not adaptive to per-cell noise profiles.
+4. **No MDT-specific message format**: MDT data rides on the standard `MeasurementReport`, so MDT-specific fields (timestamp of measurement, trigger reason) never leave the UE.
+5. **No natural-language interface**: An engineer must read C source code to understand why a specific threshold fired or what the system's behavior means.

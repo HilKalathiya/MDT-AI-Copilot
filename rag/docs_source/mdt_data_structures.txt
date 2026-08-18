@@ -1,0 +1,110 @@
+# MDT Data Structures — C Source Reference
+
+## UE-Side: nr_mdt_sample_t (rrc_defs.h / nr_rrc_defs.h)
+
+The core data structure on the UE side. Each measurement sample is stored as:
+
+```c
+typedef struct {
+    uint32_t frame;             // Radio frame number when sampled
+    uint16_t hfn;               // Hyper Frame Number (longer-running counter)
+    uint8_t  gnb_index;         // Index of the gNB the UE is connected to
+    uint16_t Nid_cell;          // Cell ID being measured
+    bool     is_csi_meas;       // True if from CSI-RS rather than SSB beam
+    bool     is_neighboring_cell; // True if measuring a neighbor cell (not serving)
+    int      rsrp_dBm;          // Signal strength in dBm
+    int      delta_rsrp_dB;     // Change vs. previous reading (signed, in dB)
+    nr_mdt_trigger_reason_t reason; // Why this sample was logged
+} nr_mdt_sample_t;
+```
+
+## Trigger Reasons: nr_mdt_trigger_reason_t
+
+```c
+typedef enum {
+    NR_MDT_REASON_NONE,          // No specific reason / uninitialized
+    NR_MDT_REASON_ENABLE,        // MDT logging just enabled
+    NR_MDT_REASON_RSRP_DROP,     // Sudden RSRP drop (≥ 3 dB by default)
+    NR_MDT_REASON_LOW_RSRP,      // Absolute RSRP below threshold (≤ -100 dBm by default)
+    NR_MDT_REASON_MEAS_UPDATE,   // Periodic measurement update
+    NR_MDT_REASON_PERIODIC,      // Scheduled periodic logging
+} nr_mdt_trigger_reason_t;
+```
+
+Threshold defaults are set in `nr_rrc_mdt_reset()`:
+- Drop threshold: **3 dB** (if delta_rsrp_dB ≤ -3, reason = RSRP_DROP)
+- Low RSRP threshold: **-100 dBm** (if rsrp_dBm ≤ -100, reason = LOW_RSRP)
+
+## Ring Buffer
+
+UE-side samples are stored in a fixed-size ring buffer:
+
+```c
+#define NR_MDT_LOG_BUFFER_SIZE 64
+
+// Per UE-connection context:
+nr_mdt_sample_t mdt_log_buffer[NR_MDT_LOG_BUFFER_SIZE];
+uint32_t        mdt_log_write_idx;  // next write position (wraps around)
+uint32_t        mdt_log_count;      // total samples logged (may exceed 64)
+```
+
+This means at most 64 samples are available at any one time. Older samples are overwritten as new ones arrive. This is a deliberate design choice to bound memory use — but it means historical data is inherently limited without an export mechanism.
+
+## gNB-Side: nr_mdt_report_t (nr_rrc_defs.h)
+
+When the gNB receives a MeasurementReport over SRB1, it decodes and stores it:
+
+```c
+typedef struct {
+    time_t      received_time;       // Unix timestamp when gNB received the report
+    uint32_t    ue_rrc_id;           // UE identifier in the gNB's context
+    NR_MeasId_t measId;              // Measurement configuration ID
+    uint16_t    serving_cell_id;     // UE's current serving cell
+    int         serving_rsrp_dBm;   // Serving cell RSRP (already converted to dBm)
+    uint16_t    neighbor_cell_id;    // Neighboring cell ID, if present
+    int         neighbor_rsrp_dBm;  // Neighbor cell RSRP (already converted to dBm)
+    bool        has_neighbor;        // Whether neighbor data was in this report
+} nr_mdt_report_t;
+```
+
+## RSRP Index to dBm Conversion
+
+The raw RSRP value in the 3GPP ASN.1 MeasurementReport is an index, not a dBm value. The mapping is:
+
+```
+RSRP_dBm = RSRP_index + 157
+```
+
+This is the standard 3GPP conversion from NR_RSRP-Range (TS 38.133 Table 10.1.6.1-1). The conversion is performed before storage in `store_mdt_report()`, so all values in `nr_mdt_report_t` and in the database are already in dBm.
+
+## store_mdt_report() in rrc_gNB.c
+
+The gNB stores each incoming MDT report into the UE's context:
+
+```c
+void store_mdt_report(rrc_gNB_ue_context_t *ue_context, nr_mdt_report_t *report) {
+    // Append to a growable list on the UE context
+    // ...
+    LOG_I(RRC, "[MDT][gNB UE %d] stored report #%u measId=%d "
+          "serving_cell=%u serving_RSRP=%d dBm "
+          "neighbor_cell=%u neighbor_RSRP=%d dBm\n",
+          report->ue_rrc_id,
+          ue_context->mdt_report_count,
+          report->measId,
+          report->serving_cell_id,
+          report->serving_rsrp_dBm,
+          report->neighbor_cell_id,
+          report->neighbor_rsrp_dBm);
+}
+```
+
+This log line is the data source boundary for the MDT AI Copilot pipeline. The log parser in `pipeline/log_parser.py` extracts exactly these fields using a regex.
+
+## Why a Ring Buffer Instead of a Plain Array?
+
+The ring buffer choice (vs. a growable array or linked list) is deliberate:
+1. **Bounded memory**: A UE connection might last hours and generate thousands of samples. A ring buffer ensures memory use is O(1) regardless of connection duration.
+2. **Temporal locality**: Recent samples are typically more relevant for real-time network decisions than old ones. The ring buffer naturally discards the oldest data first.
+3. **Lock-free potential**: Ring buffers with a single writer and single reader can be implemented without locks, which matters for real-time RRC processing.
+
+The tradeoff is that historical data is lost, which is precisely why a persistent export layer (this project) adds value.
