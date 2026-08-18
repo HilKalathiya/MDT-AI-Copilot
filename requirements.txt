@@ -1,0 +1,43 @@
+# MDT AI Copilot — Python Dependencies
+# Python 3.11+
+
+# ── Core data & DB ──────────────────────────────────────────
+pandas>=2.1.0
+numpy>=1.26.0
+
+# ── ML ──────────────────────────────────────────────────────
+scikit-learn>=1.4.0
+
+# ── LLM / Agent ─────────────────────────────────────────────
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0        # used for ChatOpenAI pointed at OpenRouter
+langchain-cohere>=0.3.0        # Cohere embed-v4.0 embeddings
+langchain-chroma>=0.2.0
+langchain-text-splitters>=0.3.0
+langgraph>=0.2.0
+
+# ── Vector store ─────────────────────────────────────────────
+chromadb>=0.5.0
+
+# ── Document loaders ─────────────────────────────────────────
+pypdf>=4.0.0
+
+# ── Dashboard (Streamlit) ────────────────────────────────────
+streamlit>=1.35.0
+plotly>=5.22.0
+streamlit-chat>=0.1.1
+
+# ── API backend (for Next.js dashboard) ──────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+
+# ── Environment ──────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Testing ──────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-cov>=5.0.0
+
+# ── Dev tooling ──────────────────────────────────────────────
+rich>=13.7.0

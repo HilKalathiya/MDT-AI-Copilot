@@ -1,0 +1,56 @@
+# Database & vector store (generated, not committed)
+data/mdt.db
+data/chroma/
+*.db
+PROJECT_GUIDE.md
+# Environment variables
+.env
+api-keys.txt
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node.js (for Next.js dashboard)
+dashboard/web/node_modules/
+dashboard/web/.next/
+dashboard/web/out/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# ML models
+ml/models/*.pkl
+ml/models/*.joblib
+
+# OS
+.DS_Store
+Thumbs.db
+
+copilot
+ml
+pipeline
+rag
