@@ -1,5 +1,9 @@
 # MDT AI Copilot
 
+┌──────────────────────────────────────────────────────────────────────┐
+│ AI analytics and agentic RAG copilot for OpenAirInterface 5G MDT   │
+└──────────────────────────────────────────────────────────────────────┘
+
 > **AI analytics and agentic RAG copilot for OpenAirInterface 5G MDT**
 
 Built an AI analytics and agentic RAG copilot (LangGraph, tool + retrieval routing) on OpenAirInterface's 5G MDT pipeline — added coverage-anomaly detection, RSRP forecasting, and a natural-language network assistant grounded in the project's own docs and codebase, closing a data-export gap in the existing system.
@@ -41,7 +45,7 @@ The internship ended there. **This project adds everything the existing system w
 ## The Problem We Solved
 
 | Gap in Existing System | What We Added | Why It Matters |
-|---|---|---|
+| --- | --- | --- |
 | Reports live in gNB memory only — lost on restart | **SQLite export pipeline** (log parser + synthetic generator) | Persistent storage, analytics, ML input |
 | Fixed hard-coded thresholds (3 dB, −100 dBm) | **Per-UE rolling z-score anomaly detector** | Adapts to each cell's actual noise profile |
 | No signal forecasting | **Lag-feature GradientBoosting RSRP predictor** | Flag degradation *before* a threshold fires |
@@ -79,6 +83,7 @@ The internship ended there. **This project adds everything the existing system w
 **Goal:** Stand up the repo structure and database schema from scratch.
 
 **What we created:**
+
 - Full repository layout with all module directories
 - `pipeline/db.py` — initializes the SQLite database with two tables:
   - `mdt_reports` — gNB-side data (as received/decoded at the tower)
@@ -100,6 +105,7 @@ The internship ended there. **This project adds everything the existing system w
 Two independent data sources were built:
 
 #### Log Parser (`pipeline/log_parser.py`)
+
 Parses actual gNB log output lines into the `mdt_reports` table using a regex pattern matching the exact format logged by `store_mdt_report()` in `rrc_gNB.c`:
 
 ```
@@ -111,6 +117,7 @@ Parses actual gNB log output lines into the `mdt_reports` table using a regex pa
 - Includes `parse_log_line()` for single-line parsing and `tail_and_ingest()` for streaming
 
 #### Synthetic Generator (`pipeline/synthetic_gen.py`)
+
 Generates a fully realistic synthetic dataset without needing a running 5G simulator:
 
 - Creates 10 simulated UEs with random-walk RSRP signals
@@ -121,6 +128,7 @@ Generates a fully realistic synthetic dataset without needing a running 5G simul
 - Correctly assigns trigger reasons (`periodic`, `meas_update`, `rsrp_drop`, `low_rsrp`) based on the same thresholds the real gNB uses
 
 #### Demo Script (`scripts/demo_phase1.py`)
+
 Runs `init_db()` + `generate_synthetic_dataset()` and prints row counts as a sanity check.
 
 **Definition of done:** ≥10 UEs, ≥1 hour of samples, ≥2 anomalous UEs, unit tests pass. ✅
@@ -136,12 +144,14 @@ Two ML models were built and evaluated:
 #### Anomaly Detection (`ml/anomaly.py`)
 
 **Primary: Rolling Z-Score Detector**
+
 - Computes a per-UE rolling mean and standard deviation over `rsrp_dbm`
 - Flags any sample where `abs(z_score) > threshold` (default: 3.0)
 - Window size: 20 samples (100 seconds of real-time at 5-second intervals)
 - Key advantage over fixed thresholds: adapts to each UE's own recent baseline — a signal that's "normal for that UE" won't false-positive
 
 **Stretch: IsolationForest Detector**
+
 - Uses `sklearn.ensemble.IsolationForest` over two features: `rsrp_dbm` and `delta_rsrp_db`
 - Provides an interesting comparison point: "I tried two approaches, here's the tradeoff"
 - Contamination parameter set to 5%
@@ -158,6 +168,7 @@ Two ML models were built and evaluated:
 Why GBR over LSTM: The dataset is too small (~7k rows) for an LSTM to outperform tree-based methods. GBR is interpretable (feature importances), trains instantly, and is easier to explain in an interview.
 
 #### Evaluation (`ml/evaluate.py`)
+
 - Computes precision/recall/F1 for the anomaly detector against `is_injected_anomaly` ground truth
 - Computes model MAE vs. naive MAE for the forecaster
 - Anomaly recall: **≥80%** on synthetic set
@@ -175,6 +186,7 @@ This is the most architecturally interesting part of the project. Instead of a f
 #### Why agentic RAG (not naive RAG)?
 
 The question space is genuinely heterogeneous:
+
 - *"How many reports do we have for UE 3?"* — pure data question, SQL only
 - *"Why does the code use a ring buffer?"* — pure conceptual question, docs only
 - *"Cell 5 looks unhealthy — is that expected given MDT trigger logic?"* — needs both
@@ -184,6 +196,7 @@ Naive RAG always retrieves, wasting tokens on data questions. An agent that choo
 #### RAG Pipeline (`rag/build_index.py`)
 
 Built a Chroma vector store (local, no external service) from four curated knowledge documents:
+
 - `mdt_system_overview.txt` — how the MDT system works end-to-end
 - `mdt_data_structures.txt` — the C structs (`nr_mdt_sample_t`, `nr_mdt_report_t`) and their fields
 - `architecture_design.txt` — design decisions and system architecture rationale
@@ -196,7 +209,7 @@ Documents are chunked at 500 tokens with 50-token overlap and embedded using **C
 Five LangChain tools that give the agent direct access to live data:
 
 | Tool | Purpose |
-|---|---|
+| --- | --- |
 | `query_reports` | Query MDT samples with optional filters (cell, UE, time window) |
 | `run_anomaly_scan` | Run the anomaly detector over recent samples, optionally scoped to one cell |
 | `get_cell_summary` | Avg RSRP, sample count, anomaly count for a cell |
@@ -208,6 +221,7 @@ Each tool truncates its output to 4,000 characters to prevent context overflow.
 #### The Agent (`copilot/agent.py`)
 
 Built with `langgraph.prebuilt.create_react_agent` (LangGraph v1.0, stable since Oct 2025):
+
 - **LLM:** Cohere `command-r-plus-08-2024` (native tool-calling support, free tier)
 - **ReAct loop:** Reason → select tool → observe result → repeat until answer is ready
 - **Guardrails:** Max 8 tool calls per question (`MAX_TOOL_CALLS` in `.env`), configurable
@@ -228,6 +242,7 @@ A plain chat loop: type a question, see the answer. Shows which tools were calle
 #### Streamlit Dashboard (`dashboard/app.py`)
 
 A 5-panel interactive dashboard:
+
 1. **Network Overview** — RSRP heatmap, UE count, anomaly rate
 2. **Cell Health** — per-cell stats (avg RSRP, sample count, anomaly count)
 3. **Anomaly Explorer** — interactive time-series with anomaly flags highlighted
@@ -237,6 +252,7 @@ A 5-panel interactive dashboard:
 #### FastAPI Backend (`dashboard/api.py`)
 
 REST API that exposes all ML and data functionality for the Next.js frontend:
+
 - `GET /api/cell-summary` — summary stats for all cells
 - `GET /api/anomalies` — recent anomalies
 - `GET /api/forecast` — forecasted RSRP values
@@ -245,6 +261,7 @@ REST API that exposes all ML and data functionality for the Next.js frontend:
 #### Next.js Web Dashboard (`dashboard/web/`)
 
 A premium dark-mode web interface built with Next.js 14 + TypeScript:
+
 - Real-time data fetching from the FastAPI backend
 - Interactive charts (Plotly.js)
 - Embedded AI copilot chat panel
@@ -253,7 +270,7 @@ A premium dark-mode web interface built with Next.js 14 + TypeScript:
 #### Demo Scripts
 
 | Script | Purpose |
-|---|---|
+| --- | --- |
 | `scripts/demo_phase1.py` | Generate synthetic data, print row counts |
 | `scripts/demo_phase2.py` | Run ML evaluation, print anomaly recall + MAE |
 | `scripts/demo_full.py` | End-to-end demo — all phases in sequence |
@@ -322,6 +339,7 @@ mdt-ai-copilot/
 ## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
 - Node.js 18+ (for Next.js dashboard only)
 - **Cohere API key** — for embeddings (`embed-v4.0`) and LLM (`command-r-plus-08-2024`) — both free at [cohere.com](https://cohere.com)
@@ -384,26 +402,33 @@ npm run dev
 ## Key Design Decisions
 
 ### Why SQLite?
+
 Zero operational overhead, single file, Python stdlib — runs on any laptop with no infrastructure setup. Perfect for a portfolio demo that must work from a cold clone.
 
 ### Why GradientBoosting over LSTM?
+
 The dataset is ~7,000 rows (10 UEs × 720 samples). LSTMs need significantly more data to outperform tree-based methods at this scale. GBR with lag features is interpretable (feature importances available), trains in milliseconds, and beats the naive baseline cleanly.
 
 ### Why rolling z-score over fixed thresholds?
+
 The existing gNB uses fixed 3 dB / −100 dBm thresholds. These are suboptimal for cells with high natural variance. A per-UE rolling z-score adapts to each UE's own recent baseline — it catches anomalies that are anomalous *for that UE*, not just absolutely low.
 
 ### Why agentic RAG and not naive RAG?
+
 The question set is heterogeneous: pure data questions (SQL, no retrieval), pure conceptual questions (retrieval, no SQL), and hybrid questions. Naive RAG always retrieves regardless — wasting tokens for data questions. An agent that decides per-question covers all three correctly.
 
 **Important caveat:** agentic RAG is not automatically "better" — it costs more per query and is overkill for a simple single-corpus FAQ bot where naive RAG is cheaper and just as accurate. It earns its place here specifically because the tool surface is genuinely heterogeneous.
 
 ### Why `create_react_agent` and not `AgentExecutor`?
+
 `AgentExecutor` is the pre-LangGraph approach and doesn't integrate cleanly with the current LangChain ecosystem. `create_react_agent` is the stable standard as of LangGraph v1.0 (October 2025) and correctly implements the ReAct (Reason → Act → Observe) loop.
 
 ### Why Cohere for both embeddings and LLM?
+
 Cohere's `embed-v4.0` model is one of the best embedding models available and has a free tier. `command-r-plus-08-2024` natively supports tool calling and is also free for developers — meaning the entire project runs with a single free API account.
 
 ### Why synthetic data?
+
 The real OAI/Duranta system requires a full 5G simulator to produce live MDT log output. Synthetic data with seeded randomness (`seed=42`) means the demo runs from any laptop, every run produces the same results, and — critically — we get free ground-truth anomaly labels (`is_injected_anomaly`) for evaluating the ML models. You can't get that for free from real data.
 
 ---
@@ -411,7 +436,7 @@ The real OAI/Duranta system requires a full 5G simulator to produce live MDT log
 ## Technologies Used
 
 | Category | Technology |
-|---|---|
+| --- | --- |
 | Language | Python 3.11+ |
 | Database | SQLite (stdlib) |
 | ML | scikit-learn (GradientBoostingRegressor, IsolationForest) |
@@ -438,7 +463,7 @@ pytest tests/ -v
 **Test coverage:**
 
 | File | What it tests |
-|---|---|
+| --- | --- |
 | `tests/test_log_parser.py` | 5 hand-written gNB log lines — including a no-neighbor variant, a non-MDT line that should be ignored, and edge-case RSRP values |
 | `tests/test_anomaly.py` | Column presence, spike detection (injected −20 dBm drop), false positive rate on clean signal, threshold sensitivity |
 | `tests/test_forecast.py` | Lag feature construction, model training completes, MAE evaluation, `predict_next()` with exact input |
@@ -457,7 +482,7 @@ Two guardrails prevent the agent from misbehaving:
 ## Phase Completion Summary
 
 | Phase | Description | Status |
-|---|---|---|
+| --- | --- | --- |
 | **Phase 0** | Scaffold — repo structure + SQLite schema | ✅ Done |
 | **Phase 1** | Export pipeline — log parser + synthetic generator + unit tests | ✅ Done |
 | **Phase 2** | ML core — anomaly detection (recall ≥80%) + RSRP forecasting (beats naive baseline) | ✅ Done |
@@ -506,7 +531,7 @@ See `PROJECT_GUIDE.md` for the full specification, architecture deep-dive, and i
 ## Gap → Solution
 
 | Gap in existing system | What this project adds | Why it matters |
-|---|---|---|
+| --- | --- | --- |
 | Reports live in gNB memory only — lost on process restart | SQLite export pipeline (log parser + synthetic generator) | Persistence, analytics, ML input |
 | Fixed hard-coded thresholds (3 dB, −100 dBm) | Per-UE rolling z-score anomaly detector | Adapts to each cell's actual noise profile |
 | No signal forecasting | Lag-feature GradientBoosting RSRP predictor | Flag degradation *before* a threshold fires |
@@ -517,6 +542,7 @@ See `PROJECT_GUIDE.md` for the full specification, architecture deep-dive, and i
 ## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
 - Node.js 18+ (for Next.js dashboard)
 - OpenRouter API key (for the agent — `openai/gpt-oss-20b:free`, free tier)
@@ -628,20 +654,25 @@ mdt-ai-copilot/
 ## Key Design Decisions
 
 ### Why SQLite?
+
 Zero operational overhead, single file, Python stdlib — perfect for a portfolio project that must "run from a cold clone" without any infrastructure setup.
 
 ### Why GradientBoosting over LSTM?
+
 The dataset is ~7,000 rows (10 UEs × 720 samples). LSTMs need significantly more data to outperform tree-based methods here. GBR with lag features is interpretable (feature importances available) and trains in milliseconds.
 
 ### Why rolling z-score over fixed thresholds?
+
 The existing gNB uses fixed 3 dB / −100 dBm thresholds. These are suboptimal for cells with high natural variance. A per-UE rolling z-score adapts to each UE's own recent baseline — it catches anomalies that are anomalous *for that UE*, not just absolutely.
 
 ### Why agentic RAG and not naive RAG?
+
 The question set is heterogeneous: pure data questions (SQL, no retrieval), pure conceptual questions (retrieval, no SQL), and hybrid questions. Naive RAG always retrieves regardless — wasting tokens for data questions and still missing them for conceptual ones. An agent that decides per-question covers all three correctly.
 
 See `PROJECT_GUIDE.md` Section 7.1 for the full explanation, including when *not* to use agentic RAG.
 
 ### Why LangGraph's `create_react_agent` and not `AgentExecutor`?
+
 `AgentExecutor` is the pre-LangGraph approach — it doesn't integrate cleanly with the current ecosystem. `create_react_agent` is the stable standard as of LangGraph v1.0 (Oct 2025) and correctly implements the ReAct (reason → act → observe) loop.
 
 ---
@@ -653,6 +684,7 @@ pytest tests/ -v
 ```
 
 Tests cover:
+
 - Log parser: 5 hand-written test cases (including no-neighbor line variant)
 - Anomaly detector: column presence, spike detection, false positive rate, threshold sensitivity
 - Forecaster: lag feature construction, model training, MAE evaluation, predict_next()
@@ -662,6 +694,7 @@ Tests cover:
 ## Agent Guardrails
 
 Per Section 7.4 of `PROJECT_GUIDE.md`:
+
 1. **Max tool calls per question**: 8 (configurable via `MAX_TOOL_CALLS` in `.env`)
 2. **Tool output truncation**: 4,000 characters max per result (prevents context overflow)
 
@@ -670,7 +703,7 @@ Per Section 7.4 of `PROJECT_GUIDE.md`:
 ## Phase Definitions of Done
 
 | Phase | Criteria | Status |
-|---|---|---|
+| --- | --- | --- |
 | Phase 0 | `python -m pipeline.db --init` creates correct schema | ✅ |
 | Phase 1 | ≥10 UEs, ≥1h samples, ≥2 anomalous UEs, unit tests pass | ✅ |
 | Phase 2 | Anomaly recall ≥80%, forecaster beats naive MAE baseline | ✅ |
@@ -684,5 +717,5 @@ Per Section 7.4 of `PROJECT_GUIDE.md`:
 This is a portfolio project extending a 2-month 5G/6G research internship (HNNOIX). The internship codebase is a private fork ("Duranta") of OpenAirInterface's 5G RRC stack with an MDT feature already implemented. This project adds what the existing system is missing: data export, ML analytics, and an agentic RAG copilot.
 
 See `PROJECT_GUIDE.md` for the full specification, architecture deep-dive, and interview preparation notes.
-# MDT-AI-Copilot
+
 # MDT-AI-Copilot

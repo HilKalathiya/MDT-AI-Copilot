@@ -51,6 +51,5 @@ ml/models/*.joblib
 Thumbs.db
 
 copilot
-ml
 pipeline
 rag
