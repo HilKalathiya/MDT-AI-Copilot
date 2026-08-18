@@ -50,5 +50,5 @@ ml/models/*.joblib
 .DS_Store
 Thumbs.db
 
-copilot
+
 rag
